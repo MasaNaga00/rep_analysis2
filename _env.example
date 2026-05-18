@@ -1,0 +1,88 @@
+# =================================================================
+# Repair Analysis - 環境変数サンプル
+# =================================================================
+# このファイルを `.env` という名前でコピーして、自分の環境用に値を埋めてください。
+# 値を埋めたら `python-dotenv` が自動で読み込みます(Notebook起動時 / GUI起動時)。
+#
+#   cp .env.example .env
+#
+# 注意:
+# - `.env` は機密情報を含むので、git にコミットしないこと(.gitignore 推奨)
+# - 値はクォーテーション不要(= の右側にそのまま書く)
+# - 値内に半角スペースが含まれる場合はダブルクォートで囲む
+#   例: MSSQL_PASSWORD="pass word"
+# - コメントは行頭 # で。値の途中で # を書くとそれ以降が無視されるので注意
+
+# -----------------------------------------------------------------
+# Dify API (必須)
+# -----------------------------------------------------------------
+
+# Dify のベース URL
+# - クラウド版を使う場合: https://api.dify.ai/v1
+# - 社内ホストの場合: https://dify.your-company.example.com/v1
+DIFY_API_BASE=https://api.dify.ai/v1
+
+# 1回目ワークフロー(スキーマ生成)のAPIキー
+# Dify の「ワークフロー > APIアクセス > APIキー」から取得。app- で始まる。
+DIFY_API_KEY_SCHEMA=app-xxxxxxxxxxxxxxxxxxxxxxxx
+
+# 2回目ワークフロー(タグ付け)のAPIキー
+# こちらも Dify の別ワークフローのAPIキー
+DIFY_API_KEY_TAGGING=app-yyyyyyyyyyyyyyyyyyyyyyyy
+
+# -----------------------------------------------------------------
+# CA証明書 (社内Difyの場合のみ必要、クラウド版なら省略可)
+# -----------------------------------------------------------------
+
+# 相対パスの場合、プロジェクトルートと CWD の順で探索される。
+# 絶対パスを書いてもOK。
+# 省略時は certs/dify_ca.pem を探しに行く。
+DIFY_CA_CERT_PATH=certs/dify_ca.pem
+
+# -----------------------------------------------------------------
+# MS SQL Server (CSV のみ使う場合は省略可)
+# -----------------------------------------------------------------
+
+# サーバアドレス。Azure SQL Database なら *.database.windows.net 形式
+MSSQL_SERVER=your-server.database.windows.net
+
+# データベース名
+MSSQL_DATABASE=RepairDB
+
+# ユーザ名(Windows認証ならコメントアウトでOK)
+MSSQL_USER=your_username
+
+# パスワード(特殊文字を含む場合はダブルクォートで囲む)
+MSSQL_PASSWORD=your_password
+
+# ODBC ドライバ名(波括弧含めて記述)
+# - Mac: brew install msodbcsql18 した場合は {ODBC Driver 18 for SQL Server}
+# - Windows: 通常 {ODBC Driver 18 for SQL Server} か {ODBC Driver 17 for SQL Server}
+MSSQL_DRIVER={ODBC Driver 18 for SQL Server}
+
+# -----------------------------------------------------------------
+# 処理パラメータ (必要に応じて調整、デフォルト値で動く)
+# -----------------------------------------------------------------
+
+# 1バッチあたりのレコード数(10〜20推奨。短いコメントなら20〜30)
+# BATCH_SIZE=10
+
+# 並列リクエスト数(3〜10推奨、Difyレート制限と相談)
+# MAX_CONCURRENT=5
+
+# リトライ回数
+# MAX_RETRIES=3
+
+# 1リクエストのタイムアウト秒数(LLM 推論時間に応じて)
+# REQUEST_TIMEOUT=120
+
+# 1レコード(コメント結合後)の最大長(超過分は切り詰める)
+# MAX_COMMENT_LENGTH=2000
+
+# -----------------------------------------------------------------
+# 出力先
+# -----------------------------------------------------------------
+
+# 結果ファイル(Parquet / CSV / JSON)の保存先ディレクトリ
+# 省略時は ./output
+# OUTPUT_DIR=./output

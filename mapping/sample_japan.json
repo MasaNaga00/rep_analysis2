@@ -1,0 +1,17 @@
+{
+  "name": "国内拠点サンプル",
+  "description": "日本国内の修理拠点からのCSVエクスポート用のサンプルマッピング。実際のカラム名に合わせて編集してから使用してください。",
+  "columns": {
+    "repair_id": "修理番号",
+    "user_comment": "お客様コメント",
+    "repair_comment": "修理者コメント",
+    "internal_1": "内部メモ1",
+    "internal_2": "内部メモ2"
+  },
+  "passthrough_columns": [
+    "機種",
+    "修理日",
+    "拠点コード",
+    "国コード"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "海外拠点サンプル",
+  "description": "海外の修理拠点からのCSVエクスポート用のサンプルマッピング。internal_2 を null にすることで、そのカラムが存在しないフォーマットにも対応できます。実際のカラム名に合わせて編集してから使用してください。",
+  "columns": {
+    "repair_id": "RepairID",
+    "user_comment": "CustomerComment",
+    "repair_comment": "TechComment",
+    "internal_1": "InternalNote",
+    "internal_2": null
+  },
+  "passthrough_columns": [
+    "Model",
+    "RepairDate",
+    "ServiceCenter",
+    "CountryCode"
+  ]
+}
