@@ -339,8 +339,42 @@ class TaggingTab(BaseTab):
             self.state.tagged_df = tagged_df
             self._log(f"タグ付け結果フラット化: {len(tagged_df)}件")
         except Exception as e:
-            self._log(f"⚠️ フラット化エラー: {e}")
-            messagebox.showerror("フラット化エラー", str(e))
+            # 詳細を吐いて原因究明を助ける
+            self._log(f"⚠️ フラット化エラー: {type(e).__name__}: {e}")
+            
+            # batch_results の構造をダンプ
+            try:
+                br = self.state.batch_results
+                if br:
+                    self._log(f"  batch_results 件数: {len(br)}")
+                    first = br[0]
+                    self._log(f"  [0] success: {first.get('success')}")
+                    self._log(f"  [0] type(results): {type(first.get('results'))}")
+                    
+                    results = first.get("results")
+                    if isinstance(results, list) and len(results) > 0:
+                        self._log(f"  [0] len(results): {len(results)}")
+                        item = results[0]
+                        self._log(f"  [0] type(results[0]): {type(item).__name__}")
+                        if isinstance(item, str):
+                            self._log(f"  [0] results[0] が文字列(先頭200字): {item[:200]}")
+                        elif isinstance(item, dict):
+                            self._log(f"  [0] results[0] keys: {list(item.keys())}")
+                        else:
+                            self._log(f"  [0] results[0] 内容: {repr(item)[:200]}")
+                    elif isinstance(results, str):
+                        self._log(f"  [0] results が文字列(先頭300字): {results[:300]}")
+                    else:
+                        self._log(f"  [0] results 内容: {repr(results)[:300]}")
+            except Exception as dump_err:
+                self._log(f"  ダンプ自体に失敗: {dump_err}")
+            
+            messagebox.showerror(
+                "フラット化エラー",
+                f"{type(e).__name__}: {e}\n\n"
+                f"詳細はログ欄を確認してください。\n"
+                f"よくある原因: Dify からの返り値が想定形式と違う(配列の中身が文字列等)"
+            )
         
         # 失敗バッチ表示
         self._refresh_failed_tree()

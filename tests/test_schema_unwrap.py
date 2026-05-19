@@ -263,15 +263,64 @@ def test_tagging_success_false():
         print(f"  ✅ OK: 期待通りエラー: {e}")
 
 
-def test_tagging_unknown_format():
-    """想定外の形式"""
-    print("\n=== test_tagging_unknown_format ===")
-    outputs = {"result": {"something_else": "no results"}}
+def test_tagging_pattern_f_array_of_strings():
+    """outputs["results"] が配列だが、各要素が文字列(JSON エスケープされたまま)"""
+    print("\n=== test_tagging_pattern_f_array_of_strings ===")
+    import json
+    # 各レコードが文字列として配列の要素になっているケース
+    outputs = {
+        "results": [
+            json.dumps(EXPECTED_TAGGING[0], ensure_ascii=False),
+            json.dumps(EXPECTED_TAGGING[1], ensure_ascii=False),
+        ]
+    }
+    result = _unwrap_tagging_response(outputs)
+    assert result == EXPECTED_TAGGING, \
+        f"期待: {EXPECTED_TAGGING}, 実際: {result}"
+    print("  ✅ OK: 配列の中身が文字列でも要素ごとにパース")
+
+
+def test_tagging_pattern_f_result_array_of_strings():
+    """outputs["result"] が文字列で、パース結果が「文字列の配列」"""
+    print("\n=== test_tagging_pattern_f_result_array_of_strings ===")
+    import json
+    # まず外側を文字列に、中身も各要素文字列のまま(2重エスケープ)
+    inner_array = [
+        json.dumps(EXPECTED_TAGGING[0], ensure_ascii=False),
+        json.dumps(EXPECTED_TAGGING[1], ensure_ascii=False),
+    ]
+    outputs = {"result": json.dumps(inner_array, ensure_ascii=False)}
+    result = _unwrap_tagging_response(outputs)
+    assert result == EXPECTED_TAGGING
+    print("  ✅ OK: 二重エスケープも解凍")
+
+
+def test_tagging_pattern_f_mixed_dict_and_str():
+    """配列に dict と str が混在(変則的だが念のため)"""
+    print("\n=== test_tagging_pattern_f_mixed_dict_and_str ===")
+    import json
+    outputs = {
+        "results": [
+            EXPECTED_TAGGING[0],  # dict のまま
+            json.dumps(EXPECTED_TAGGING[1], ensure_ascii=False),  # 文字列
+        ]
+    }
+    result = _unwrap_tagging_response(outputs)
+    assert result == EXPECTED_TAGGING
+    print("  ✅ OK: 混在も正常化")
+
+
+def test_normalize_invalid_element_type():
+    """配列に int 等の dict/str 以外が混入した場合は明確にエラー"""
+    print("\n=== test_normalize_invalid_element_type ===")
+    outputs = {"results": [EXPECTED_TAGGING[0], 42, "..."]}
     try:
         _unwrap_tagging_response(outputs)
         assert False, "DifyJSONParseError が出るべき"
     except DifyJSONParseError as e:
-        print(f"  ✅ OK: {e}")
+        msg = str(e)
+        assert "想定外の型" in msg or "int" in msg
+        print(f"  ✅ 期待通りエラー: {e}")
 
 
 if __name__ == "__main__":
@@ -294,7 +343,11 @@ if __name__ == "__main__":
     test_tagging_pattern_c2_result_wrapped_dict()
     test_tagging_pattern_d_result_direct_array()
     test_tagging_success_false()
-    test_tagging_unknown_format()
+    # パターンF: 配列の中身が文字列(本日報告された問題)
+    test_tagging_pattern_f_array_of_strings()
+    test_tagging_pattern_f_result_array_of_strings()
+    test_tagging_pattern_f_mixed_dict_and_str()
+    test_normalize_invalid_element_type()
     
     print("\n" + "=" * 50)
     print("✅ スキーマ・タグ付け解凍 全テスト通過")

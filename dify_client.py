@@ -293,6 +293,8 @@ def _unwrap_tagging_response(outputs: dict) -> list:
         パターンC: outputs["result"] が dict で {"success": true, "results": [...]} ラップ
         パターンD: outputs["result"] が直接配列
         パターンE: outputs["text"] にコードブロック付きJSON
+        パターンF: 配列の中身が文字列(各要素がまだJSONエスケープ済み)
+                  → 要素ごとにパースして dict 化
     
     success: False のラッパーが付いていれば DifyError を投げる。
     """
@@ -302,22 +304,22 @@ def _unwrap_tagging_response(outputs: dict) -> list:
         if isinstance(val, str):
             val = extract_json(val)
         if isinstance(val, list):
-            return val
+            return _normalize_list_items(val)
     
     # その他: result / text / 最初のキー
     raw = outputs.get("result") or outputs.get("text") or \
           next(iter(outputs.values()), None)
     
-    # 既にリストならそのまま
+    # 既にリストならそのまま(中身は正規化する)
     if isinstance(raw, list):
-        return raw
+        return _normalize_list_items(raw)
     
     # 文字列ならパース
     if isinstance(raw, str):
         raw = extract_json(raw)
     
     if isinstance(raw, list):
-        return raw
+        return _normalize_list_items(raw)
     
     # dict なら {success, results} ラッパーを剥がす
     if isinstance(raw, dict):
@@ -325,7 +327,7 @@ def _unwrap_tagging_response(outputs: dict) -> list:
             err = raw.get("error") or raw.get("message") or "ワークフローが success: false を返しました"
             raise DifyError(f"Dify タグ付けエラー: {err}")
         if "results" in raw and isinstance(raw["results"], list):
-            return raw["results"]
+            return _normalize_list_items(raw["results"])
         # 1件だけ返ってきたケース? (リストに包んで返す)
         if "repair_id" in raw:
             return [raw]
@@ -334,6 +336,46 @@ def _unwrap_tagging_response(outputs: dict) -> list:
         f"タグ付け結果(配列)の取り出しに失敗しました。型: {type(raw)}, "
         f"内容: {str(raw)[:200]}"
     )
+
+
+def _normalize_list_items(items: list) -> list:
+    """
+    配列の各要素が dict であることを保証する。
+    要素が文字列の場合(よくある: LLM が JSON 文字列を要素として返した)、
+    要素ごとに JSON パースする。
+    
+    すべての要素が dict であれば追加処理は不要、そのまま返す。
+    """
+    if not items:
+        return items
+    
+    # 全部 dict ならそのまま
+    if all(isinstance(x, dict) for x in items):
+        return items
+    
+    # 文字列要素を dict にパース
+    normalized = []
+    for i, x in enumerate(items):
+        if isinstance(x, dict):
+            normalized.append(x)
+        elif isinstance(x, str):
+            try:
+                parsed = extract_json(x)
+                if not isinstance(parsed, dict):
+                    raise DifyJSONParseError(
+                        f"要素 {i} が dict ではなく {type(parsed).__name__}: "
+                        f"{str(parsed)[:100]}"
+                    )
+                normalized.append(parsed)
+            except DifyJSONParseError:
+                raise DifyJSONParseError(
+                    f"要素 {i} (str) を JSON としてパースできません: {x[:200]}"
+                )
+        else:
+            raise DifyJSONParseError(
+                f"要素 {i} が想定外の型: {type(x).__name__} = {repr(x)[:100]}"
+            )
+    return normalized
 
 
 # ---------- 2回目：タグ付け（非同期バッチ） ----------
