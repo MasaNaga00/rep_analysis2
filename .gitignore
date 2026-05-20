@@ -1,0 +1,33 @@
+# =================================================================
+# Repair Analysis - .gitignore
+# =================================================================
+
+# --- 秘密情報 ---
+.env
+certs/*.pem
+certs/*.crt
+certs/*.cer
+# certs/README.md は残す(配置説明のため)
+
+# --- cx_Freeze ビルド成果物 ---
+build/
+dist/
+
+# --- セッション・出力(ローカルデータ) ---
+output/
+*.parquet
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- IDE ---
+.vscode/
+.idea/

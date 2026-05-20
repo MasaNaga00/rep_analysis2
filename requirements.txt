@@ -1,0 +1,48 @@
+# =================================================================
+# Repair Analysis - 依存パッケージ
+# =================================================================
+# ビルドPC・実行環境にインストールする依存。
+#   pip install -r requirements.txt
+#
+# 注: バージョンは下限のみ緩く指定。既存環境を壊さないよう、
+#     厳密固定はしていない。本番で動作実績のあるバージョンが既に
+#     入っているならそのままでよい。
+#
+# Windows でのビルド前提:
+#   - Python 3.10 〜 3.12 推奨(cx_Freeze の対応状況による)
+#   - 64bit Python
+
+# --- データ処理 ---
+pandas>=1.5
+numpy>=1.23
+pyarrow>=10.0          # Parquet 入出力
+
+# --- Dify API 通信 ---
+aiohttp>=3.8           # 非同期並列リクエスト(2回目タグ付け)
+requests>=2.28         # 同期リクエスト(1回目スキーマ生成)
+tenacity>=8.0          # リトライ
+
+# --- SQL Server 接続 ---
+pyodbc>=4.0            # MS SQL Server。別途 ODBC Driver 18 のインストールも必要
+
+# --- GUI テーブル表示 ---
+pandastable>=0.13
+matplotlib>=3.5        # pandastable の依存
+
+# --- 設定読み込み ---
+python-dotenv>=0.21    # .env 読み込み(インポート名は dotenv)
+
+# --- ビルドツール(ビルドPCのみ必要、実行環境には不要) ---
+cx_Freeze>=6.14
+
+# --- 任意(あると便利、無くても動く) ---
+# nest_asyncio>=1.5    # Jupyter Notebook 内で asyncio を回す場合に必要
+                       # GUI(別スレッドでasyncio)では不要なことが多い
+
+# 注意:
+# - tkinter は Python 標準ライブラリ。pip では入らない。
+#   Windows 公式インストーラの Python なら標準で同梱されている。
+# - pyodbc を使うには、OS 側に「ODBC Driver 18 for SQL Server」が必要。
+#   Microsoft の公式サイトからインストールすること。
+#   CSV しか使わない運用なら pyodbc / ODBC ドライバは無くても起動はする
+#   (SQL 取得を実行した時だけエラーになる)。

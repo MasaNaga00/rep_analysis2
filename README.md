@@ -215,3 +215,73 @@ Notebookを開いてセルを上から順に実行:
 
 出力された `*_ranked.csv` または `*_tagged.parquet` をデータソースとして使う。
 passthrough_columns で指定した機種・修理日等もそのまま使える。
+
+## Windows 実行ファイルのビルド(配布用)
+
+GUI を Python 環境のない PC に配布するために、cx_Freeze で
+1フォルダ形式の実行ファイル(`RepairAnalysis.exe` + 依存ファイル群)を作る。
+
+### 前提
+
+- **Windows PC 上でビルドすること**(クロスコンパイル不可。Mac では Windows 用 exe は作れない)
+- ビルド PC に本プロジェクトと同じ依存が入っていること:
+  ```
+  pip install -r requirements.txt
+  ```
+- 64bit Python 3.10〜3.12 推奨
+
+### ビルド手順
+
+プロジェクトルート(`setup.py` がある場所)で:
+
+```
+python setup.py build_exe
+```
+
+完了すると `build/RepairAnalysis/` に以下が生成される:
+
+```
+build/RepairAnalysis/
+├── RepairAnalysis.exe      ← これを実行
+├── lib/                    ← Python ランタイム・ライブラリ一式
+├── mappings/               ← マッピングプリセット(同梱)
+├── certs/                  ← CA証明書置き場(READMEのみ。実証明書は別途配置)
+├── .env.example
+└── README.md
+```
+
+この `build/RepairAnalysis/` フォルダごと配布すればよい。
+受け取った人は `RepairAnalysis.exe` をダブルクリックで起動できる(Python不要)。
+
+### 配布前にやること
+
+1. **CA証明書の配置**: 社内 Dify を使う場合、`build/RepairAnalysis/certs/dify_ca.pem`
+   に実際の証明書を置く。または配布先で設定画面からパス指定。
+2. **.env は同梱しない**: APIキー等の秘密情報が入るため。配布先で
+   `.env.example` を `.env` にコピーして各自設定するか、設定画面から入力。
+   - なお settings は `%APPDATA%/repair-analysis/settings.json` に保存されるので、
+     初回に設定画面で入力・保存すれば次回以降は不要。
+
+### よくあるビルドの問題
+
+**起動時に `ModuleNotFoundError`**
+- `setup.py` の `includes` に該当モジュールを追加する
+- 自作モジュールを増やした場合は `includes` のトップレベル一覧にも追記
+
+**`ODBC Driver ... not found`(SQL使用時)**
+- 配布先 PC にも「ODBC Driver 18 for SQL Server」のインストールが必要
+  (これは exe に同梱できない、OS レベルのドライバ)
+- CSV のみ使う運用なら無視してよい
+
+**起動はするが certs / mappings が見つからない**
+- exe と同じ階層に `certs/` `mappings/` フォルダがあるか確認
+- アプリは exe のあるディレクトリを基準にこれらを探す
+
+**exe のサイズが大きい / 起動が重い**
+- pandas・numpy・matplotlib・pyarrow を含むため数百MBになるのは正常
+- 1フォルダ形式なので初回起動以降は速い
+
+### アイコンを付けたい場合
+
+`app_icon.ico` をプロジェクトルートに置いてから `python setup.py build_exe` すると、
+exe のアイコンに反映される(無ければデフォルトアイコン)。
