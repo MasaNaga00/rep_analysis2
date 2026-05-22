@@ -44,6 +44,7 @@ packages = [
     "pandas",
     "numpy",
     "pyarrow",          # Parquet 読み書き
+    "openpyxl",         # Excel(.xlsx) 出力
     # 非同期 HTTP
     "aiohttp",
     "asyncio",

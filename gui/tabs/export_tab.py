@@ -111,7 +111,7 @@ class ExportTab(BaseTab):
         
         ttk.Label(
             main, foreground="gray",
-            text="ヒント: ranked_csv は Tableau Desktop で直接開けます (UTF-8 BOM 付き)"
+            text="ヒント: results.xlsx に tagged(全件)/ranked(絞り込み) の2シートが入ります。Tableau Desktop でも直接開けます"
         ).pack(anchor="w", pady=(8, 0))
     
     # ------------------------------------------------------------------
@@ -179,7 +179,7 @@ class ExportTab(BaseTab):
             messagebox.showinfo(
                 "保存完了",
                 f"{len(paths)} ファイルを保存しました。\n\n"
-                "ranked_csv は Tableau Desktop で直接開けます。"
+                "results.xlsx に tagged/ranked の2シートが入っています。"
             )
         except Exception as e:
             self.var_progress.set(f"❌ 失敗: {e}")
@@ -190,7 +190,7 @@ class ExportTab(BaseTab):
         
         # 表示順を制御(重要なものから)
         display_order = [
-            ("ranked_csv", "絞り込み結果 (CSV, Tableau用)"),
+            ("results_xlsx", "結果 (Excel: tagged/ranked 2シート)"),
             ("ranked_parquet", "絞り込み結果 (Parquet)"),
             ("tagged_parquet", "タグ付け結果 全件 (Parquet)"),
             ("schema_json", "使用スキーマ (JSON)"),

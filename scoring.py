@@ -16,6 +16,79 @@ import pandas as pd
 import config
 
 
+# ---------- 型正規化ヘルパー ----------
+
+def _to_bool(v) -> bool:
+    """
+    Difyの戻り値に混在しうる bool/str/None を bool に正規化する。
+    "false"/"0"/"no"/"" 等は False、"true"/"1"/"yes"/"はい" 等は True。
+    """
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    if isinstance(v, (int, float)):
+        return bool(v)
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "1", "yes", "y", "はい")
+    return bool(v)
+
+
+def _to_float(v, default: float = 0.0) -> float:
+    """
+    数値列(overall_relevance, conf__*)を float に正規化する。
+    None・空文字・パース不能値は default にフォールバック。
+    """
+    if isinstance(v, bool):
+        # bool は数値扱いしない(True/False が 1.0/0.0 になるのを防ぐ)
+        return default
+    if isinstance(v, (int, float)):
+        return float(v)
+    if v is None:
+        return default
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return default
+        try:
+            return float(s)
+        except ValueError:
+            return default
+    return default
+
+
+def _coerce_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    保存前に列の dtype を確定させ、object 型混在による
+    Parquet/Excel 書き込みエラーを防ぐ。
+    
+    - insufficient_info: bool
+    - overall_relevance / conf__* / match_score: float
+    - tag__* / evidence__* / 文字列系: object のまま(NaN は空文字へ)
+    """
+    df = df.copy()
+    
+    if "insufficient_info" in df.columns:
+        df["insufficient_info"] = df["insufficient_info"].apply(_to_bool).astype(bool)
+    
+    float_cols = ["overall_relevance", "match_score"]
+    float_cols += [c for c in df.columns if c.startswith("conf__")]
+    for c in float_cols:
+        if c in df.columns:
+            df[c] = df[c].apply(_to_float).astype(float)
+    
+    # 文字列系の列は NaN/None を空文字に揃える(Excel/Parquet で型がブレないように)
+    str_cols = [c for c in df.columns
+                if c.startswith(("tag__", "evidence__"))
+                or c in ("repair_id", "language_detected",
+                         "relevance_reason", "insufficient_reason")]
+    for c in str_cols:
+        if c in df.columns:
+            df[c] = df[c].where(df[c].notna(), "").astype(object)
+    
+    return df
+
+
 def flatten_tagging_results(
     batch_results: list[dict],
     schema: dict,
@@ -49,9 +122,9 @@ def flatten_tagging_results(
             row = {
                 "repair_id": item.get("repair_id"),
                 "language_detected": item.get("language_detected"),
-                "overall_relevance": item.get("overall_relevance", 0.0),
+                "overall_relevance": _to_float(item.get("overall_relevance", 0.0)),
                 "relevance_reason": item.get("relevance_reason", ""),
-                "insufficient_info": item.get("insufficient_info", False),
+                "insufficient_info": _to_bool(item.get("insufficient_info", False)),
                 "insufficient_reason": item.get("insufficient_reason", ""),
             }
             
@@ -61,7 +134,7 @@ def flatten_tagging_results(
             
             for ax in axes_names:
                 row[f"tag__{ax}"] = tags.get(ax)
-                row[f"conf__{ax}"] = confidence.get(ax, 0.0)
+                row[f"conf__{ax}"] = _to_float(confidence.get(ax, 0.0))
                 row[f"evidence__{ax}"] = evidence.get(ax, "")
             
             rows.append(row)
@@ -185,21 +258,28 @@ def save_results(
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True, parents=True)
     
+    # 保存前に dtype を確定(object 型混在による書き込みエラーを防ぐ)
+    tagged_df = _coerce_dtypes(tagged_df)
+    ranked_df = _coerce_dtypes(ranked_df)
+    
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     prefix = f"{timestamp}_{tag}" if tag else timestamp
     
     paths = {
+        "results_xlsx": output_dir / f"{prefix}_results.xlsx",
         "tagged_parquet": output_dir / f"{prefix}_tagged.parquet",
         "ranked_parquet": output_dir / f"{prefix}_ranked.parquet",
-        "ranked_csv": output_dir / f"{prefix}_ranked.csv",
         "schema_json": output_dir / f"{prefix}_schema.json",
         "meta_json": output_dir / f"{prefix}_meta.json",
     }
     
     tagged_df.to_parquet(paths["tagged_parquet"], index=False)
     ranked_df.to_parquet(paths["ranked_parquet"], index=False)
-    # CSVは Tableau・Excelで開けるようBOM付きUTF-8
-    ranked_df.to_csv(paths["ranked_csv"], index=False, encoding="utf-8-sig")
+    # Excel: 1ファイルに「全件(tagged)」「絞り込み(ranked)」を別シートで出力。
+    # Excel で確認したいユーザ向け。Tableau もこの xlsx を直接読める。
+    with pd.ExcelWriter(paths["results_xlsx"], engine="openpyxl") as writer:
+        tagged_df.to_excel(writer, index=False, sheet_name="tagged")
+        ranked_df.to_excel(writer, index=False, sheet_name="ranked")
     
     with open(paths["schema_json"], "w", encoding="utf-8") as f:
         json.dump(schema, f, ensure_ascii=False, indent=2)

@@ -16,6 +16,7 @@
 pandas>=1.5
 numpy>=1.23
 pyarrow>=10.0          # Parquet 入出力
+openpyxl>=3.0          # Excel(.xlsx) 出力
 
 # --- Dify API 通信 ---
 aiohttp>=3.8           # 非同期並列リクエスト(2回目タグ付け)
