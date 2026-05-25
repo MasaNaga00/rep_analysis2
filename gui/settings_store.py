@@ -64,6 +64,9 @@ class AppSettings:
     request_timeout: int = 120
     max_comment_length: int = 2000
     
+    # タグ付け件数の警告しきい値(この件数超でポップアップ警告)
+    tagging_warn_threshold: int = 500
+    
     # 出力
     output_dir: str = ""  # 空なら ./output を使う
     
@@ -123,6 +126,13 @@ class AppSettings:
         config.MAX_RETRIES = self.max_retries
         config.REQUEST_TIMEOUT = self.request_timeout
         config.MAX_COMMENT_LENGTH = self.max_comment_length
+        
+        # タグ付け警告しきい値:
+        # settings.json で既定値(500)から変更されている場合のみ config を上書きする。
+        # 変更されていなければ config.py が .env から読んだ値を尊重する
+        # (=「デフォルト500・.envで変更可能」を保ちつつ、GUIでの明示変更も効かせる)。
+        if self.tagging_warn_threshold != 500:
+            config.TAGGING_WARN_THRESHOLD = self.tagging_warn_threshold
         
         if self.output_dir:
             config.OUTPUT_DIR = Path(self.output_dir)

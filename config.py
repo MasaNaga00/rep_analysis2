@@ -44,6 +44,11 @@ REQUEST_TIMEOUT = 120     # Difyリクエストタイムアウト（秒）
 # コメント前処理
 MAX_COMMENT_LENGTH = 2000  # 1カラムあたりの最大文字数（超過時は切り詰め）
 
+# タグ付け件数の警告しきい値
+# この件数を超えてタグ付けしようとすると、GUIで確認ポップアップを出す
+# (トークン消費が大きくなるため)。.env の TAGGING_WARN_THRESHOLD で変更可能。
+TAGGING_WARN_THRESHOLD = int(os.getenv("TAGGING_WARN_THRESHOLD", "500"))
+
 
 # === 出力 ===
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "./output"))

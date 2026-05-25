@@ -184,6 +184,24 @@ class TaggingTab(BaseTab):
             )
             return
         
+        # 件数がしきい値を超える場合、トークン消費の警告を出す
+        try:
+            import config
+            threshold = getattr(config, "TAGGING_WARN_THRESHOLD", 500)
+        except ImportError:
+            threshold = 500
+        
+        n_records = len(self.state.records) if self.state.records else 0
+        if n_records > threshold:
+            if not messagebox.askyesno(
+                "件数確認",
+                f"{n_records} 件をタグ付けしようとしています"
+                f"(警告しきい値: {threshold} 件)。\n\n"
+                "件数が多いとトークンを多く消費します。続行しますか?",
+                icon="warning",
+            ):
+                return
+        
         # 既存の結果がある場合は確認
         if self.state.batch_results:
             if not messagebox.askyesno(

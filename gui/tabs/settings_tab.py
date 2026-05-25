@@ -66,6 +66,7 @@ class SettingsTab(BaseTab):
         self.var_max_retries = tk.IntVar(value=s.max_retries)
         self.var_request_timeout = tk.IntVar(value=s.request_timeout)
         self.var_max_comment_length = tk.IntVar(value=s.max_comment_length)
+        self.var_tagging_warn_threshold = tk.IntVar(value=s.tagging_warn_threshold)
         
         self.var_output_dir = tk.StringVar(value=s.output_dir)
         
@@ -132,6 +133,7 @@ class SettingsTab(BaseTab):
             ("リトライ回数:", self.var_max_retries, "通常3"),
             ("タイムアウト(秒):", self.var_request_timeout, "120推奨"),
             ("最大コメント長:", self.var_max_comment_length, "1カラム超過分は切詰め"),
+            ("タグ付け警告件数:", self.var_tagging_warn_threshold, "この件数超で確認(既定500)"),
         ]:
             ttk.Label(parent, text=label).grid(row=row, column=0, sticky="e", **pad)
             spin = ttk.Spinbox(parent, from_=1, to=999999, textvariable=var, width=10)
@@ -278,6 +280,7 @@ class SettingsTab(BaseTab):
         s.max_retries = int(self.var_max_retries.get())
         s.request_timeout = int(self.var_request_timeout.get())
         s.max_comment_length = int(self.var_max_comment_length.get())
+        s.tagging_warn_threshold = int(self.var_tagging_warn_threshold.get())
         
         s.output_dir = self.var_output_dir.get().strip()
     
@@ -317,5 +320,6 @@ class SettingsTab(BaseTab):
         self.var_max_retries.set(s.max_retries)
         self.var_request_timeout.set(s.request_timeout)
         self.var_max_comment_length.set(s.max_comment_length)
+        self.var_tagging_warn_threshold.set(s.tagging_warn_threshold)
         
         self.var_output_dir.set(s.output_dir)
