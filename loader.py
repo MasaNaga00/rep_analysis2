@@ -19,6 +19,8 @@ loader.py - SQL/CSV 共通データロードレイヤー
                        mapping_name="sample_japan")
 """
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Optional, Union
 
@@ -39,8 +41,45 @@ COMMENT_LOGICAL_COLUMNS = [
 ]
 ALL_LOGICAL_COLUMNS = REQUIRED_LOGICAL_COLUMNS + COMMENT_LOGICAL_COLUMNS
 
-# マッピングプリセット保存先(プロジェクトルート/mappings)
-MAPPINGS_DIR = Path(__file__).parent / "mappings"
+
+# ------------------------------------------------------------------
+# マッピング保存先の解決
+# ------------------------------------------------------------------
+#
+# 【frozen対応・重要】cx_Freeze で固めると loader.py は lib\library.zip の中に入る。
+# そのため Path(__file__).parent は "...\lib\library.zip" を指し、その配下に
+# mkdir しようとすると [WinError 183]（library.zip は実在ファイルなので
+# その中にディレクトリは作れない）で保存に失敗する。
+#
+# 対策として保存先を2系統に分ける:
+#   - 同梱プリセット(BUNDLED): 読み取り専用。frozen時は exe の隣、通常時はソース隣の mappings/
+#   - ユーザー作成(USER):       読み書き可。%APPDATA%\repair-analysis\mappings（OSのユーザー領域）
+# 読み込みは両方から(同名はユーザー優先)、書き込みは常にユーザー領域へ。
+# 詳細は AI_HANDOFF.md 参照。
+
+def _get_app_root() -> Path:
+    """アプリのルート。frozen時は exe のあるディレクトリ、通常時はこのファイルの隣。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent
+
+
+def _get_user_data_dir() -> Path:
+    """ユーザーごとの書き込み可能領域(settings/sessions と同じ場所)。"""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", Path.home())) / "repair-analysis"
+    else:
+        base = Path.home() / ".repair-analysis"
+    return base
+
+
+# 同梱プリセット(読み取り専用)とユーザー領域(読み書き)
+BUNDLED_MAPPINGS_DIR = _get_app_root() / "mappings"
+USER_MAPPINGS_DIR = _get_user_data_dir() / "mappings"
+
+# 後方互換: 既存コードが MAPPINGS_DIR を参照していた場合に備え、
+# 「保存先」を指す別名として残す(=ユーザー領域)。
+MAPPINGS_DIR = USER_MAPPINGS_DIR
 
 
 # ------------------------------------------------------------------
@@ -49,29 +88,37 @@ MAPPINGS_DIR = Path(__file__).parent / "mappings"
 
 def list_mappings() -> list[dict]:
     """
-    mappings/ ディレクトリ内のマッピングプリセット一覧を返す。
-    
+    マッピングプリセット一覧を返す（同梱＋ユーザー領域の両方）。
+    同名がある場合はユーザー領域を優先する。
+
     Returns:
         [{"name": "sample_japan", "display_name": "国内拠点サンプル",
-          "description": "...", "path": "..."}, ...]
+          "description": "...", "path": "...", "source": "bundled"|"user",
+          "editable": bool}, ...]
     """
-    if not MAPPINGS_DIR.exists():
-        return []
-    
-    result = []
-    for json_path in sorted(MAPPINGS_DIR.glob("*.json")):
-        try:
-            with open(json_path, encoding="utf-8") as f:
-                data = json.load(f)
-            result.append({
-                "name": json_path.stem,
-                "display_name": data.get("name", json_path.stem),
-                "description": data.get("description", ""),
-                "path": str(json_path),
-            })
-        except (json.JSONDecodeError, OSError) as e:
-            print(f"⚠️ マッピング読み込み失敗: {json_path.name}: {e}")
-    return result
+    # 先に同梱、後でユーザーを読み、同名はユーザーで上書き(=ユーザー優先)
+    by_name: dict[str, dict] = {}
+    for source, base in (("bundled", BUNDLED_MAPPINGS_DIR),
+                         ("user", USER_MAPPINGS_DIR)):
+        if not base.exists():
+            continue
+        for json_path in sorted(base.glob("*.json")):
+            try:
+                with open(json_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                by_name[json_path.stem] = {
+                    "name": json_path.stem,
+                    "display_name": data.get("name", json_path.stem),
+                    "description": data.get("description", ""),
+                    "path": str(json_path),
+                    "source": source,
+                    # 保存はユーザー領域に行くので、どちらも実質「編集可」
+                    # (同梱を編集すると同名でユーザー領域に保存され、以後そちらが優先)
+                    "editable": True,
+                }
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"⚠️ マッピング読み込み失敗: {json_path.name}: {e}")
+    return [by_name[k] for k in sorted(by_name)]
 
 
 def load_mapping(mapping_name: str) -> dict:
@@ -89,10 +136,13 @@ def load_mapping(mapping_name: str) -> dict:
         FileNotFoundError: マッピングファイルが存在しない
         ValueError: マッピング内容が不正
     """
-    # パスとして直接指定された場合
+    # パスとして直接指定された場合はそれを使う。
+    # 名前指定の場合はユーザー領域→同梱の順で探す(ユーザー優先)。
     path = Path(mapping_name)
     if not path.suffix:
-        path = MAPPINGS_DIR / f"{mapping_name}.json"
+        user_path = USER_MAPPINGS_DIR / f"{mapping_name}.json"
+        bundled_path = BUNDLED_MAPPINGS_DIR / f"{mapping_name}.json"
+        path = user_path if user_path.exists() else bundled_path
     
     if not path.exists():
         available = [m["name"] for m in list_mappings()]
@@ -111,18 +161,23 @@ def load_mapping(mapping_name: str) -> dict:
 def save_mapping(mapping: dict, mapping_name: str) -> Path:
     """
     マッピングプリセットをJSONとして保存する(GUIから呼ばれる想定)。
-    
+
+    保存先は常にユーザー領域(USER_MAPPINGS_DIR)。
+    同梱領域(BUNDLED_MAPPINGS_DIR)には書き込まない。
+    これにより frozen(exe)環境で library.zip 配下に mkdir して
+    [WinError 183] になる問題を回避する。
+
     Args:
         mapping: マッピング定義
         mapping_name: 拡張子なしのファイル名
-    
+
     Returns:
         保存先パス
     """
     _validate_mapping_structure(mapping, None)
-    MAPPINGS_DIR.mkdir(exist_ok=True, parents=True)
+    USER_MAPPINGS_DIR.mkdir(exist_ok=True, parents=True)
     
-    path = MAPPINGS_DIR / f"{mapping_name}.json"
+    path = USER_MAPPINGS_DIR / f"{mapping_name}.json"
     with open(path, "w", encoding="utf-8") as f:
         json.dump(mapping, f, ensure_ascii=False, indent=2)
     return path

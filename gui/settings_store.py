@@ -128,9 +128,10 @@ class AppSettings:
         config.MAX_COMMENT_LENGTH = self.max_comment_length
         
         # タグ付け警告しきい値:
-        # settings.json で既定値(500)から変更されている場合のみ config を上書きする。
-        # 変更されていなければ config.py が .env から読んだ値を尊重する
-        # (=「デフォルト500・.envで変更可能」を保ちつつ、GUIでの明示変更も効かせる)。
+        # 【繊細・単純化禁止】settings.json が既定値(500)のままなら config を上書きせず、
+        # config.py が .env から読んだ値を尊重する。これにより「デフォルト500・.envで変更可・
+        # GUIで明示変更すれば最優先」を同時に成立させている。
+        # 「常に上書き」に変えると .env での変更が効かなくなる。詳細は AI_HANDOFF.md §4-3。
         if self.tagging_warn_threshold != 500:
             config.TAGGING_WARN_THRESHOLD = self.tagging_warn_threshold
         

@@ -217,14 +217,35 @@ class SettingsTab(BaseTab):
             original = config.DIFY_CA_CERT_PATH
             config.DIFY_CA_CERT_PATH = path
             try:
-                from dify_client import resolve_ca_cert_path, _build_ssl_context
-                resolved = resolve_ca_cert_path()
-                _build_ssl_context(resolved)
-                messagebox.showinfo(
-                    "証明書テスト",
-                    f"✅ 証明書ファイルが正しく読み込めました。\n\n"
-                    f"解決後のパス:\n{resolved}"
+                from dify_client import (
+                    resolve_ca_cert_path, _build_ssl_context,
+                    _truststore_available,
                 )
+                resolved = resolve_ca_cert_path()
+                if resolved is not None:
+                    # ファイルが見つかった: 実際に読み込めるか検証
+                    _build_ssl_context(resolved)
+                    messagebox.showinfo(
+                        "証明書テスト",
+                        f"✅ 証明書ファイルが正しく読み込めました。\n\n"
+                        f"解決後のパス:\n{resolved}"
+                    )
+                elif _truststore_available():
+                    # ファイル無し → Windows証明書ストアにフォールバック可能
+                    messagebox.showinfo(
+                        "証明書テスト",
+                        "ℹ️ 証明書ファイルは見つかりませんでしたが、"
+                        "Windows証明書ストアを使って接続します"
+                        "(truststore 利用可能)。\n\n"
+                        "社内CAがWindowsに登録されていれば接続できます。"
+                    )
+                else:
+                    messagebox.showwarning(
+                        "証明書テスト",
+                        "⚠️ 証明書ファイルが見つからず、Windows証明書ストアも"
+                        "利用できません(truststore 未導入)。\n\n"
+                        "証明書ファイルを配置するか、truststore を導入してください。"
+                    )
             finally:
                 config.DIFY_CA_CERT_PATH = original
         except Exception as e:

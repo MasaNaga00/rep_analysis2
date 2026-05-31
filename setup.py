@@ -57,6 +57,7 @@ packages = [
     "tenacity",
     "dotenv",           # python-dotenv のインポート名は dotenv
     "requests",
+    "truststore",       # CA証明書フォールバック(OS証明書ストア)
     "ssl",
     "json",
     "encodings",        # 文字コード周り(日本語処理で重要)

@@ -17,6 +17,13 @@ import config
 
 
 # ---------- 型正規化ヘルパー ----------
+#
+# 【重要・削除禁止】このセクションの正規化は実際のバグ対策です。
+# Dify は insufficient_info を bool / 文字列 "true" / キー欠落(None) で混在して返し、
+# overall_relevance や conf__* も文字列や None で返すことがある。
+# そのまま DataFrame に入れると列が object 型になり、Parquet/Excel 書き込みが
+# 「Conversion failed for column ... with type object」で失敗する。
+# 「冗長」に見えても削除しないこと。詳細は AI_HANDOFF.md §2-3,4。
 
 def _to_bool(v) -> bool:
     """
@@ -169,6 +176,9 @@ def score_record(
     """
     score = 0.0
     
+    # 【不変条件】core軸は「ちょうど1個」前提。0個だと StopIteration、
+    # 複数あると先頭1個のみ使用。スキーマ生成プロンプト(Dify側)でも1個に制約している。
+    # tier は "core"/"detail" の2値のみ。詳細は AI_HANDOFF.md §2-1,2。
     core_axis = next(ax for ax in schema["axes"] if ax["tier"] == "core")
     detail_axes = [ax for ax in schema["axes"] if ax["tier"] == "detail"]
     

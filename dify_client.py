@@ -50,41 +50,46 @@ def _get_app_root() -> Path:
     return Path(__file__).resolve().parent
 
 
-def resolve_ca_cert_path(configured_path: Optional[str] = None) -> Path:
+# ---------- CA証明書の解決とフォールバック ----------
+#
+# 【設計メモ・方針変更禁止】証明書は「ファイル優先・無ければ Windows 証明書ストア
+# (truststore)」の二段構え。truststore を使う理由:
+#   - python-certifi-win32 は公式に非推奨・メンテ終了で pip を壊す既知バグがあり、
+#     cx_Freeze(frozen) 環境での runtime monkey-patch も不安定なため採用しない。
+#   - pip-system-certs(後継) も v5系で pip を壊した事例があり避けた。
+# truststore に戻す以外の証明書実装へ変更しないこと。詳細は AI_HANDOFF.md §5。
+#
+# resolve_ca_cert_path は「見つからなければ None を返す」(例外を投げない)。
+# 呼び出し側が None を見て truststore フォールバックに分岐する設計。
+
+def resolve_ca_cert_path(configured_path: Optional[str] = None) -> Optional[Path]:
     """
     CA証明書ファイルのパスを解決して返す。
-    
+
     探索順:
         1. 絶対パスならそのまま使用
         2. 相対パスなら ①アプリルート → ②カレントディレクトリ の順
-    
+
+    見つからない場合は None を返す(例外は投げない)。
+    呼び出し側は None のとき Windows 証明書ストア(truststore)へフォールバックする。
+
     Args:
         configured_path: 設定された証明書パス（省略時は config.DIFY_CA_CERT_PATH）
-    
+
     Returns:
-        証明書ファイルの絶対パス
-    
-    Raises:
-        DifyCertificateError: ファイルが見つからない
+        証明書ファイルの絶対パス。見つからなければ None。
     """
     # 引数指定があれば優先、なければ config を使用
-    # 空文字は「未設定」として扱う(GUI でクリアされたケース等)
+    # 空文字は「未設定」として扱う(GUI でクリアされたケース等)→ None でフォールバック
     path_str = configured_path if configured_path is not None else config.DIFY_CA_CERT_PATH
     if not path_str:
-        raise DifyCertificateError(
-            "CA証明書パスが設定されていません。"
-            "config.DIFY_CA_CERT_PATH または環境変数 DIFY_CA_CERT_PATH を確認してください。"
-        )
-    
+        return None
+
     path = Path(path_str)
-    
+
     if path.is_absolute():
-        if not path.exists():
-            raise DifyCertificateError(
-                f"CA証明書ファイルが存在しません: {path}"
-            )
-        return path
-    
+        return path if path.exists() else None
+
     # 相対パスの場合は探索(重複は除去)
     seen = set()
     candidates = []
@@ -93,30 +98,59 @@ def resolve_ca_cert_path(configured_path: Optional[str] = None) -> Path:
         if candidate not in seen:
             seen.add(candidate)
             candidates.append(candidate)
-    
+
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    
-    raise DifyCertificateError(
-        f"CA証明書ファイル '{path_str}' が見つかりません。\n"
-        f"以下を確認してください:\n"
-        f"  探索した場所:\n"
-        + "\n".join(f"    - {c}" for c in candidates)
-        + f"\n  config.DIFY_CA_CERT_PATH = '{path_str}'"
-    )
+
+    return None
+
+
+def _truststore_available() -> bool:
+    """truststore がインストールされているか。"""
+    try:
+        import truststore  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _build_truststore_context() -> ssl.SSLContext:
+    """
+    truststore を使い、OS(Windows)の証明書ストアで検証する SSLContext を作る。
+    証明書ファイルが見つからない場合のフォールバック。
+
+    Raises:
+        DifyCertificateError: truststore 未導入で OS ストアも使えない
+    """
+    if not _truststore_available():
+        raise DifyCertificateError(
+            "CA証明書ファイルが見つからず、Windows証明書ストアも利用できません。\n"
+            "  対処1: 証明書ファイルを所定の場所に配置する\n"
+            "         (config.DIFY_CA_CERT_PATH / 環境変数 DIFY_CA_CERT_PATH)\n"
+            "  対処2: truststore をインストールする (pip install truststore)"
+        )
+    import truststore
+    return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
 def _build_ssl_context(ca_cert_path: Optional[Path] = None) -> ssl.SSLContext:
     """
     aiohttp 用の SSLContext を構築する。
-    
+
+    証明書ファイルがあればそれで検証(従来動作)。
+    無ければ truststore で Windows 証明書ストアにフォールバックする。
+
     Args:
         ca_cert_path: CA証明書パス（省略時は resolve_ca_cert_path を使用）
     """
     if ca_cert_path is None:
         ca_cert_path = resolve_ca_cert_path()
-    
+
+    # ファイルが見つからない → Windows 証明書ストアにフォールバック
+    if ca_cert_path is None:
+        return _build_truststore_context()
+
     try:
         ctx = ssl.create_default_context(cafile=str(ca_cert_path))
     except (ssl.SSLError, OSError) as e:
@@ -198,13 +232,27 @@ def generate_tag_schema(
         "user": user_id,
     }
     
-    # CA証明書を指定してHTTPS接続
+    # CA証明書を解決。ファイルがあればそれで検証、無ければ
+    # Windows 証明書ストア(truststore)にフォールバックする。
     ca_cert = resolve_ca_cert_path()
-    
+    if ca_cert is not None:
+        verify = str(ca_cert)
+    else:
+        # truststore を ssl に注入すると、requests も OS ストアで検証するようになる
+        if not _truststore_available():
+            raise DifyCertificateError(
+                "CA証明書ファイルが見つからず、Windows証明書ストアも利用できません。\n"
+                "  対処1: 証明書ファイルを所定の場所に配置する\n"
+                "  対処2: truststore をインストールする (pip install truststore)"
+            )
+        import truststore
+        truststore.inject_into_ssl()
+        verify = True
+
     resp = requests.post(
         url, headers=headers, json=payload,
         timeout=config.REQUEST_TIMEOUT,
-        verify=str(ca_cert),
+        verify=verify,
     )
     resp.raise_for_status()
     data = resp.json()
