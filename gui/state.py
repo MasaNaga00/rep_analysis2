@@ -80,6 +80,9 @@ class AppState:
     # --- 出力タグ(ファイル名のサフィックス) ---
     output_tag: str = ""
     
+    # --- Copilot用エクスポートのON/OFF ---
+    copilot_export: bool = False
+    
     # --- DataFrame・batch_results は JSON 外で保持 ---
     # これらは dataclass 化しない(別途プロパティで管理)
     

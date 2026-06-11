@@ -64,6 +64,18 @@ class ExportTab(BaseTab):
         ttk.Label(setting_frame, text="(設定タブで変更)",
                   foreground="gray").grid(row=1, column=2, sticky="w", padx=4)
         
+        # Copilot用エクスポート
+        self.var_copilot = tk.BooleanVar(
+            value=bool(getattr(self.state, "copilot_export", False))
+        )
+        ttk.Checkbutton(
+            setting_frame,
+            text="Copilot用ファイルも出力する",
+            variable=self.var_copilot,
+        ).grid(row=2, column=1, sticky="w", padx=4, pady=4)
+        ttk.Label(setting_frame, text="(SharePointナレッジ向け: 概要+レコードカードtxt)",
+                  foreground="gray").grid(row=2, column=2, sticky="w", padx=4)
+        
         setting_frame.columnconfigure(1, weight=1)
         
         # === 操作ボタン ===
@@ -169,23 +181,48 @@ class ExportTab(BaseTab):
                 tag=tag,
             )
             self.state.output_tag = tag
+            self.state.copilot_export = self.var_copilot.get()
+            
+            # --- Copilot用エクスポート(任意・失敗しても本体保存は成功扱い) ---
+            copilot_paths: dict = {}
+            copilot_error: str | None = None
+            if self.var_copilot.get():
+                try:
+                    from copilot_export import export_for_copilot
+                    # 出力先は save_results と同じフォルダ(出力先決定ロジックを二重化しない)
+                    out_dir = Path(next(iter(paths.values()))).parent
+                    copilot_paths = export_for_copilot(
+                        tagged_df=self.state.tagged_df,
+                        ranked_df=self.state.ranked_df,
+                        schema=self.state.schema,
+                        inquiry_text=self.state.inquiry_text,
+                        out_dir=out_dir,
+                        session_id=tag or None,
+                        source_df=self.state.repair_df,  # 原文コメントの供給元
+                    )
+                except Exception as ce:
+                    copilot_error = str(ce)
             
             # ファイル一覧を表示
-            self._populate_files(paths)
+            self._populate_files(paths, copilot_paths)
             
-            self.var_progress.set(f"✅ {len(paths)} ファイルを保存しました")
+            total = len(paths) + len(copilot_paths)
+            self.var_progress.set(f"✅ {total} ファイルを保存しました")
             self.app.set_status("出力完了")
             
-            messagebox.showinfo(
-                "保存完了",
-                f"{len(paths)} ファイルを保存しました。\n\n"
-                "results.xlsx に tagged/ranked の2シートが入っています。"
-            )
+            msg = (f"{total} ファイルを保存しました。\n\n"
+                   "results.xlsx に tagged/ranked の2シートが入っています。")
+            if copilot_paths:
+                msg += (f"\nCopilot用ファイル {len(copilot_paths)} 件を出力しました。"
+                        "\nSharePointのナレッジ用フォルダへアップロードしてください。")
+            if copilot_error:
+                msg += f"\n\n⚠ Copilot用出力は失敗しました:\n{copilot_error}"
+            messagebox.showinfo("保存完了", msg)
         except Exception as e:
             self.var_progress.set(f"❌ 失敗: {e}")
             messagebox.showerror("保存失敗", str(e))
     
-    def _populate_files(self, paths: dict):
+    def _populate_files(self, paths: dict, copilot_paths: dict | None = None):
         self.tree_files.delete(*self.tree_files.get_children())
         
         # 表示順を制御(重要なものから)
@@ -203,6 +240,11 @@ class ExportTab(BaseTab):
         for key, path in paths.items():
             if key not in dict(display_order):
                 self.tree_files.insert("", "end", iid=key, values=(key, path))
+        
+        # Copilot用ファイル(ファイル名がそのままキー)
+        for fname, path in (copilot_paths or {}).items():
+            self.tree_files.insert("", "end", iid=f"copilot__{fname}",
+                                   values=(f"Copilot用: {fname}", str(path)))
     
     # ------------------------------------------------------------------
     # ファイル操作
@@ -252,9 +294,11 @@ class ExportTab(BaseTab):
     
     def on_hide(self):
         self.state.output_tag = self.var_tag.get().strip()
+        self.state.copilot_export = self.var_copilot.get()
     
     def refresh_from_state(self):
         self.var_tag.set(self.state.output_tag or "")
+        self.var_copilot.set(bool(getattr(self.state, "copilot_export", False)))
         self.var_output_dir.set(self.settings.output_dir or "./output")
         self._update_status()
         self.tree_files.delete(*self.tree_files.get_children())

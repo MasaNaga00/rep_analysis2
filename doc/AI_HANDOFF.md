@@ -17,12 +17,13 @@
   1. スキーマ生成（同期 / requests）: 問い合わせ文 → 分類軸（タグスキーマ）を生成
   2. タグ付け（非同期並列 / aiohttp）: 各レコードをスキーマでタグ付け
 - 出力: Excel（2シート）・Parquet・JSON。Tableau でも開く想定。
+  オプションで **Microsoft 365 Copilot エージェント向けファイル群**（SharePointナレッジ用）も出力可。
 - 開発はMac、配布先はPython非搭載のWindows PC。
 
 処理の流れ（GUIタブも左→右でこの順）:
 ```
 問い合わせ入力 → スキーマ生成(Dify1) → スキーマ編集 → データ取得(CSV/SQL)
-  → タグ付け(Dify2) → 絞り込み(スコアリング) → 出力(Excel/Parquet/JSON)
+  → タグ付け(Dify2) → 絞り込み(スコアリング) → 出力(Excel/Parquet/JSON [+Copilot用])
 ```
 
 ---
@@ -65,6 +66,21 @@
      （実装例: `loader._get_app_root()`, `dify_client._get_app_root()`）。
    詳細は §4-5, §9-5。
 
+9. **`copilot_export.py` は scoring.py の出力を変更しない（追加出力のみ）。**
+   results.xlsx の tagged/ranked 2シート構成、Parquet 出力はそのまま。
+   Copilot用ファイルは「追加出力」であり、既存出力の代替ではない。
+   `export_for_copilot` の `out_dir` は呼び出し側（export_tab）が `save_results` の
+   戻り値から導出する（`Path(next(iter(paths.values()))).parent`）。
+   **出力先決定ロジックを二重化しないこと。**
+
+10. **原文コメントは tagged_df に含まれない → `source_df=state.repair_df` で補完。**
+    `copilot_export._ensure_comments` が repair_id 結合で user_comment / repair_comment を補う。
+    結合キーは**両側を str に正規化**してから merge する（SQL由来の int と Dify由来の str の
+    dtype 不一致で merge が静かに全件不一致になる事故の防止）。この正規化を外さないこと。
+
+11. **`copilot_export.GLOSSARY`（用語の説明）は Copilot エージェントの指示プロンプト内の
+    用語定義と同一文言を維持する。** ナレッジ側とプロンプト側の二重化が意図。片方だけ変更しない。
+
 ---
 
 ## 3. やってはいけないこと（AIが good intentions で改悪しがちな点）
@@ -80,6 +96,11 @@
 - ❌ **出力の Excel を単一シートに戻す／CSV を復活させる。** ユーザー要望で
   「1つのxlsxにtagged/rankedの2シート」に確定済み。CSV出力は廃止済み。
 - ❌ **artifact 等でブラウザ localStorage を使う実装を足す。** このアプリはデスクトップ。
+- ❌ **Copilot用エクスポートの失敗で本体保存を失敗扱いにする。**
+  `export_tab._on_save` では try/except で隔離し、本体保存は成功・Copilot分は警告表示。
+  この隔離を「例外は伝播すべき」として外さないこと。
+- ❌ **Copilot用 .txt を docx 化するために `python-docx` を依存に足す。**
+  frozen 同梱依存を増やさないため、プレーンテキスト（UTF-8）に確定済み。変えるなら要相談。
 
 ---
 
@@ -126,6 +147,29 @@
   - 文中に `〔要確認〕` マーカーが複数残っている（配布形態・APIキー配布方法・Dify URL・
     データ種別・問い合わせ先 等）。**運用が固まったら埋める必要がある。**
 
+### 4-7. Copilot用エクスポート機能を追加（2026-06-11）
+背景: 分類結果を Microsoft 365 Copilot エージェント（エージェントビルダー、ナレッジ=SharePoint）
+に入れて、概要説明・質疑応答をできるようにするため。Copilot のナレッジは
+「Excel は単一シート向き」「1ファイル約36,000字推奨」のため、専用形式で追加出力する。
+
+- **`copilot_export.py` 新規追加**（`export_for_copilot` がエントリポイント）。出力は3種:
+  - `{session}_00_overview.txt` … 概要（問い合わせ・スキーマ・core軸分布・情報不足件数・
+    ランキング上位・用語説明 GLOSSARY・レコードファイル一覧）
+  - `{session}_10_{core値}_{NN}.txt` … レコードカード（tagged 全件。core軸値ごとに分割、
+    1ファイル30,000字以内=MAX_FILE_CHARS。グループ内は関連度降順。ranked入りは「ランクN位」付記。
+    detail軸が不明/該当なしは1行圧縮。コメント原文は600字=COMMENT_MAX_CHARS で切り詰め）
+  - `{session}_90_ranked_flat.xlsx` … ranked を単一シート・日本語列名で出力（集計質問用）
+- **`gui/state.py`**: `AppState` に `copilot_export: bool = False` を追加。
+  dataclass フィールドなのでセッション保存 `state.json` に自動で含まれる。
+- **`gui/tabs/export_tab.py`**:
+  - 出力設定に「Copilot用ファイルも出力する」チェックボックス追加（state と双方向同期）
+  - 保存実行時、チェックONなら `save_results` と同じフォルダへ Copilot用ファイルを出力
+  - Copilot出力は try/except で隔離（失敗しても本体保存は成功扱い、ダイアログに⚠警告）
+  - `_populate_files(paths, copilot_paths)` で Copilot用ファイルも一覧表示
+- **`scoring.py` / `loader.py` / `config.py` は無変更。**
+- 運用: 出力された txt/xlsx を SharePoint のナレッジ用フォルダ（1セッション=1フォルダ推奨）へ
+  手動アップロードする。エージェント側の指示プロンプトは別途管理（§2-11 の文言同期に注意）。
+
 ---
 
 ## 5. 証明書（CA）まわりの設計 — 特に重要
@@ -164,6 +208,7 @@
 | `preprocess.py` | コメント整形・言語検出・バッチ分割 | `.get()` で欠損に強い作り |
 | `scoring.py` | フラット化・スコアリング・保存 | §2-3,4 の型正規化、Excel 2シート |
 | `db.py` | SQL Server 接続 | 証明書とは無関係 |
+| `copilot_export.py` | M365 Copilot ナレッジ用エクスポート（概要txt・レコードカードtxt・ranked単一シートxlsx） | §2-9,10,11。scoring から独立。呼び出し元は export_tab のみ |
 
 ### GUI（`gui/`）
 - `app.py`（メイン、7タブ、セッション）/ `state.py` / `settings_store.py` / `workers.py`
@@ -213,10 +258,18 @@
 
 ### scoring.py 主要関数
 - `flatten_tagging_results(batch_results, schema) -> DataFrame`
-  （1行=1レコード。`tag__軸`, `conf__軸`, `evidence__軸` 列を生成。行生成時に型正規化）
+  （1行=1レコード。`tag__軸`, `conf__軸`, `evidence__軸` 列を生成。行生成時に型正規化。
+   **原文コメント列 user_comment/repair_comment は含まれない**）
 - `rank_results(df, query_tags, schema, min_relevance, top_n) -> DataFrame`
 - `save_results(tagged_df, ranked_df, schema, inquiry_text, tag) -> dict[str,Path]`
   （results.xlsx[tagged/ranked] ＋ parquet×2 ＋ json×2 を出力）
+
+### copilot_export.py 主要関数
+- `export_for_copilot(tagged_df, ranked_df, schema, inquiry_text, out_dir,
+   session_id=None, source_df=None, max_file_chars=30000) -> dict[ファイル名, Path]`
+  （source_df=state.repair_df を渡すと repair_id 結合で原文コメントを補完。§2-10 参照）
+- 調整用定数: `MAX_FILE_CHARS`（分割上限）, `COMMENT_MAX_CHARS`（コメント切り詰め）,
+  `TOP_N_OVERVIEW`（概要のランキング件数）, `GLOSSARY`（用語説明。§2-11 の文言同期対象）
 
 ---
 
@@ -257,6 +310,19 @@ pip install -r requirements.txt
    - 書き込みはユーザー領域（`%APPDATA%\repair-analysis\`）へ。読み取り専用リソースは
      `sys.frozen`→`sys.executable` の親で解決（`_get_app_root()`）。
    - 新たに「ファイルを保存する」機能を足すときは、保存先が `__file__` 基準になっていないか必ず確認すること。
+6. **cx_Freeze と copilot_export の遅延 import**: `export_tab.py` は関数内で
+   `from copilot_export import export_for_copilot` している。modulefinder は通常これを
+   検出するが、frozen ビルド後に ImportError が出る場合は setup.py の build_exe options に
+   `"includes": ["copilot_export"]` を追加する。
+7. **Copilot用 .txt は UTF-8（BOMなし）**: SharePoint/Copilot はこれで問題ない。
+   古い Windows メモ帳で確認した際に文字化けして見えても異常ではない。
+8. **Copilot用ファイル名の截断**: core軸の値はファイル名に使うため
+   `_sanitize_filename` で記号・空白を `_` に置換し24字に切り詰める。長い日本語の
+   core値は截断されるが、ファイル先頭行と overview の【レコードファイル一覧】に
+   完全な値が残るので問題ない。
+9. **SharePoint のインデックス反映遅延**: アップロード後、Copilot エージェントが
+   参照できるまで数十分程度かかることがある。直後の動作確認で「見つからない」と
+   なっても不具合ではない。
 
 ---
 
@@ -268,6 +334,15 @@ pip install -r requirements.txt
 - Dify ワークフロー側（プロンプト/出力ノード）の安定化は継続テーマ。
   特に1回目の `max_detail_axes` が効くよう、開始ノードに Number 変数があり、
   かつ LLM プロンプトに埋め込まれているかが要確認ポイント。
+- **Copilot エージェント側のセットアップ**（コードは完了、運用側が未了）:
+  - SharePoint にナレッジ用ライブラリを作成（1セッション=1フォルダ）。
+    テナントの「制限付きSharePoint検索」が有効だとナレッジ指定不可のためIT部門に要確認。
+  - エージェントビルダーで指示プロンプトを設定
+    （用語定義は `copilot_export.GLOSSARY` と同一文言にする。§2-11）。
+  - 想定質問+期待回答のテストセット（20問程度）を作り、指示プロンプト変更時の回帰テストに使う。
+  - `利用ガイド.md` に Copilot の使い方（アップロード先・反映待ち時間）の節を追加。
+- Copilot用カードの実データでの見た目確認: 原文コメントに改行が多い場合は
+  `copilot_export._trunc` 内で `re.sub(r'\n+', ' / ', s)` のように改行を潰す対処が候補。
 
 ---
 
