@@ -152,13 +152,17 @@
 に入れて、概要説明・質疑応答をできるようにするため。Copilot のナレッジは
 「Excel は単一シート向き」「1ファイル約36,000字推奨」のため、専用形式で追加出力する。
 
-- **`copilot_export.py` 新規追加**（`export_for_copilot` がエントリポイント）。出力は3種:
+- **`copilot_export.py` 新規追加**（`export_for_copilot` がエントリポイント）。常用の出力は3種:
   - `{session}_00_overview.txt` … 概要（問い合わせ・スキーマ・core軸分布・情報不足件数・
-    ランキング上位・用語説明 GLOSSARY・レコードファイル一覧）
-  - `{session}_10_{core値}_{NN}.txt` … レコードカード（tagged 全件。core軸値ごとに分割、
-    1ファイル30,000字以内=MAX_FILE_CHARS。グループ内は関連度降順。ranked入りは「ランクN位」付記。
-    detail軸が不明/該当なしは1行圧縮。コメント原文は600字=COMMENT_MAX_CHARS で切り詰め）
-  - `{session}_90_ranked_flat.xlsx` … ranked を単一シート・日本語列名で出力（集計質問用）
+    関連度上位・同梱ファイル説明・代表カード内訳・用語説明 GLOSSARY）
+  - `{session}_10_representative.txt` … 代表カード（**全件ではない**。core軸の値ごとに関連度上位
+    REPRESENTATIVE_PER_CORE 件＝既定3件。傾向把握・代表事例提示用の補助。1ファイル固定）
+  - `{session}_90_tagged_flat.xlsx` … **tagged 全件**。単一シート・日本語列名・関連度降順・
+    **コメント原文（user_comment/repair_comment）入り**。件数集計・条件抽出・個別事例の原文確認は
+    すべてこの表で完結する（Copilot側で Code Interpreter 有効化が前提）
+  - 設計意図: Copilot に常用で渡すのは3ファイルのみ（利用者が多数ファイルをアップロードする
+    手間を避ける）。全件の詳細はxlsxに集約し、txtカードは代表のみの補助に降格。
+    件数が10,000件でも出力は常に3ファイル・代表カードは約7KBで固定（実測）。
 - **`gui/state.py`**: `AppState` に `copilot_export: bool = False` を追加。
   dataclass フィールドなのでセッション保存 `state.json` に自動で含まれる。
 - **`gui/tabs/export_tab.py`**:
@@ -268,8 +272,10 @@
 - `export_for_copilot(tagged_df, ranked_df, schema, inquiry_text, out_dir,
    session_id=None, source_df=None, max_file_chars=30000) -> dict[ファイル名, Path]`
   （source_df=state.repair_df を渡すと repair_id 結合で原文コメントを補完。§2-10 参照）
-- 調整用定数: `MAX_FILE_CHARS`（分割上限）, `COMMENT_MAX_CHARS`（コメント切り詰め）,
-  `TOP_N_OVERVIEW`（概要のランキング件数）, `GLOSSARY`（用語説明。§2-11 の文言同期対象）
+- 調整用定数: `REPRESENTATIVE_PER_CORE`（代表カードのcore軸値あたり件数＝既定3）,
+  `MAX_FILE_CHARS`（代表カードの文字数上限35,000）, `COMMENT_MAX_CHARS`（カード用コメント切り詰め600。
+  xlsxは切り詰めない）, `TOP_N_OVERVIEW`（概要のランキング件数）,
+  `GLOSSARY`（用語説明。§2-11 の文言同期対象）
 
 ---
 
@@ -316,10 +322,13 @@ pip install -r requirements.txt
    `"includes": ["copilot_export"]` を追加する。
 7. **Copilot用 .txt は UTF-8（BOMなし）**: SharePoint/Copilot はこれで問題ない。
    古い Windows メモ帳で確認した際に文字化けして見えても異常ではない。
-8. **Copilot用ファイル名の截断**: core軸の値はファイル名に使うため
-   `_sanitize_filename` で記号・空白を `_` に置換し24字に切り詰める。長い日本語の
-   core値は截断されるが、ファイル先頭行と overview の【レコードファイル一覧】に
-   完全な値が残るので問題ない。
+8. **Copilotに渡すのは常用3ファイルのみ**: overview / representative / tagged_flat.xlsx。
+   件数が増えても出力は常に3ファイル（代表カードはcore軸値ごとに既定3件で固定）。
+   エージェントビルダーの100ファイル上限に余裕で収まる。全件の詳細・原文確認・集計は
+   tagged_flat.xlsx に集約しているので、Copilot側で **Code Interpreter を必ず有効化**すること
+   （無効だと全件集計・原文参照が弱くなる）。代表件数を増やしたい場合は
+   REPRESENTATIVE_PER_CORE を上げる（増やすと representative.txt が大きくなる点に注意。
+   MAX_FILE_CHARS 超過分は自動割愛され末尾に明記される）。
 9. **SharePoint のインデックス反映遅延**: アップロード後、Copilot エージェントが
    参照できるまで数十分程度かかることがある。直後の動作確認で「見つからない」と
    なっても不具合ではない。

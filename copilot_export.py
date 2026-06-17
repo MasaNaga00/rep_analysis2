@@ -4,10 +4,16 @@
 scoring.save_results() の出力（results.xlsx 等）とは独立に、
 Copilot のナレッジソースとして検索しやすいファイル群を生成する。
 
-出力（out_dir 直下）:
-  {session}_00_overview.txt        … 概要（問い合わせ・スキーマ・分布・ランキング・用語）
-  {session}_10_{core値}_{NN}.txt   … レコードカード（core軸値ごとに分割、各30,000字以内）
-  {session}_90_ranked_flat.xlsx    … ranked を単一シート・日本語列名で出力（集計質問用）
+出力（out_dir 直下、常用の3ファイル）:
+  {session}_00_overview.txt        … 概要（問い合わせ・スキーマ・分布・関連度上位・同梱ファイル説明・用語）
+  {session}_10_representative.txt  … 代表カード（core軸値ごとに関連度上位 REPRESENTATIVE_PER_CORE 件）
+  {session}_90_tagged_flat.xlsx    … tagged全件・コメント原文入り・日本語列名（集計と原文確認はこれ）
+
+設計方針:
+- Copilot に常用で渡すのは上記3ファイルのみ。多数のカードtxtを渡す運用は廃止。
+- 全件の詳細（コメント原文含む）は tagged_flat.xlsx に集約。件数集計・原文確認はxlsxで完結する
+  （Copilot側で Code Interpreter を有効にすること）。
+- txt の代表カードは「自然文で読ませて要約・類似把握させる」ための補助。
 
 設計メモ:
 - tagged_df / ranked_df は scoring.flatten_tagging_results / rank_results の出力を想定
@@ -27,8 +33,10 @@ from typing import Optional
 import pandas as pd
 
 # ── 調整可能な定数 ────────────────────────────────────────────
-MAX_FILE_CHARS = 30_000      # 1ファイルの上限（Copilot推奨36,000字に対する安全マージン）
-COMMENT_MAX_CHARS = 600      # コメント原文の切り詰め長
+REPRESENTATIVE_PER_CORE = 3  # 代表カード: core軸の値ごとに何件ずつ載せるか（関連度降順）
+MAX_FILE_CHARS = 35_000      # 代表カードファイルの上限（Copilot推奨36,000字に対する安全マージン）
+                             # 代表件数が多くこれを超える場合は超過分を割愛し、その旨を末尾に明記する
+COMMENT_MAX_CHARS = 600      # コメント原文の切り詰め長（カード用。xlsxは原文を切り詰めない）
 TOP_N_OVERVIEW = 10          # 概要に載せるランキング件数
 LOW_CONF = 0.5               # 「参考程度」とみなす確信度のしきい値（用語説明に使用）
 SKIP_DETAIL_VALUES = {"不明", "該当なし", "", None}  # detail軸で根拠を省略する値
@@ -172,11 +180,10 @@ def build_card(row: pd.Series, schema: dict, rank: Optional[int] = None) -> str:
 # ── 概要生成 ──────────────────────────────────────────────────
 def build_overview(
     tagged_df: pd.DataFrame,
-    ranked_df: Optional[pd.DataFrame],
     schema: dict,
     inquiry_text: str,
     session_id: str,
-    manifest: list[tuple[str, int]],
+    rep_info: dict,
     top_n: int = TOP_N_OVERVIEW,
 ) -> str:
     core = _core_axis(schema)
@@ -220,24 +227,36 @@ def build_overview(
         k = int(tagged_df["insufficient_info"].fillna(False).astype(bool).sum())
         parts += ["", f"【情報不足レコード】 {k}件（タグの信頼性が低い）"]
 
-    # ランキング上位
-    parts += ["", f"【関連度ランキング 上位{top_n}件】"]
-    if ranked_df is not None and not ranked_df.empty:
-        core_col = f"tag__{core['name']}"
-        for i, (_, r) in enumerate(ranked_df.head(top_n).iterrows(), start=1):
+    # 関連度上位（tagged全件を関連度降順で並べた上位N件）
+    parts += ["", f"【関連度 上位{top_n}件（全{total}件中）】"]
+    core_col = f"tag__{core['name']}"
+    if "overall_relevance" in tagged_df.columns and total > 0:
+        top = tagged_df.sort_values("overall_relevance", ascending=False).head(top_n)
+        for i, (_, r) in enumerate(top.iterrows(), start=1):
             line = f"{i}. {r.get('repair_id', '不明')} ｜ 関連度{_fmt_conf(r.get('overall_relevance'))}"
-            if core_col in ranked_df.columns and not _is_blank(r.get(core_col)):
+            if core_col in tagged_df.columns and not _is_blank(r.get(core_col)):
                 line += f" ｜ {r.get(core_col)}"
             rr = r.get("relevance_reason")
             if not _is_blank(rr):
                 line += f" ｜ 理由: {_trunc(rr, 80)}"
             parts.append(line)
     else:
-        parts.append("（絞り込み結果なし）")
+        parts.append("（関連度の情報がありません）")
 
-    parts += ["", GLOSSARY, "", "【レコードファイル一覧】"]
-    for fname, n in manifest:
-        parts.append(f"- {fname}: {n}件")
+    parts += ["", GLOSSARY, "", "【このセッションの同梱ファイル】"]
+    parts.append(f"- {session_id}_00_overview.txt: 本ファイル（概要）")
+    parts.append(
+        f"- {session_id}_10_representative.txt: 代表レコードカード"
+        f"（各core軸値ごとに関連度上位{rep_info.get('per_core', REPRESENTATIVE_PER_CORE)}件、"
+        f"計{rep_info.get('selected', 0)}件）"
+    )
+    parts.append(
+        f"- {session_id}_90_tagged_flat.xlsx: 全{total}件の一覧"
+        "（コメント原文・全タグ・確信度・関連度を含む。件数集計や個別事例の原文確認はこれを使う）"
+    )
+    parts += ["", "【代表カードの内訳】（残りは tagged_flat.xlsx を参照）"]
+    for cval, d in rep_info.get("core_breakdown", {}).items():
+        parts.append(f"- {cval}: 代表{d['selected']}件 / 全{d['total']}件")
 
     parts += [
         "",
@@ -295,61 +314,74 @@ def export_for_copilot(
     df = _ensure_comments(tagged_df, source_df)
     ranks = _rank_map(ranked_df)
     outputs: dict[str, Path] = {}
-    manifest: list[tuple[str, int]] = []
 
-    # ── レコードカード（core軸値ごと → 文字数で分割） ──
+    # ── 代表カード（1ファイル） ──
+    # 方針: core軸の値ごとに関連度上位 REPRESENTATIVE_PER_CORE 件を選び、1ファイルにまとめる。
+    #   全件は _90_tagged_flat.xlsx（コメント原文入り）にあるため、txtは「代表のみ」に絞り、
+    #   常用で渡すファイルを 概要 + 代表カード + 全件xlsx の3つに収める。
     core_col = f"tag__{core['name']}"
-    group_key = df[core_col].fillna("不明").astype(str) if core_col in df.columns else pd.Series(["不明"] * len(df))
+    rep_name = f"{sid}_10_representative.txt"
+    rep_info = {"per_core": REPRESENTATIVE_PER_CORE, "selected": 0, "omitted": 0, "core_breakdown": {}}
 
-    for core_val, g in df.groupby(group_key, sort=False):
-        if "overall_relevance" in g.columns:
-            g = g.sort_values("overall_relevance", ascending=False)
-        slug = _sanitize_filename(core_val)
+    if core_col in df.columns:
+        group_key = df[core_col].fillna("不明").astype(str)
+    else:
+        group_key = pd.Series(["不明"] * len(df), index=df.index)
 
-        chunk_lines: list[str] = []
-        chunk_count = 0
-        chunk_chars = 0
-        file_idx = 1
+    sections: list[str] = []
+    for core_val, g in group_key.groupby(group_key, sort=False):
+        sub = df.loc[g.index]
+        if "overall_relevance" in sub.columns:
+            sub = sub.sort_values("overall_relevance", ascending=False)
+        n_total = len(sub)
+        picked = sub.head(REPRESENTATIVE_PER_CORE)
+        rep_info["selected"] += len(picked)
+        rep_info["omitted"] += max(0, n_total - len(picked))
+        rep_info["core_breakdown"][core_val] = {"selected": len(picked), "total": n_total}
 
-        def _flush():
-            nonlocal chunk_lines, chunk_count, chunk_chars, file_idx
-            if not chunk_lines:
-                return
-            fname = f"{sid}_10_{slug}_{file_idx:02d}.txt"
-            header = (
-                f"レコードカード ｜ セッション: {session_id} ｜ "
-                f"{core['name']}: {core_val} ｜ 本ファイル {chunk_count}件\n"
-            )
-            path = out_dir / fname
-            path.write_text(header + "\n".join(chunk_lines) + "\n", encoding="utf-8")
-            outputs[fname] = path
-            manifest.append((fname, chunk_count))
-            file_idx += 1
-            chunk_lines, chunk_count, chunk_chars = [], 0, 0
+        sections.append(
+            f"\n【{core['name']}: {core_val}】 代表 {len(picked)}件 / 全{n_total}件"
+            + ("（残りは tagged_flat.xlsx を参照）" if n_total > len(picked) else "")
+        )
+        for _, row in picked.iterrows():
+            sections.append(build_card(row, schema, rank=ranks.get(row.get("repair_id"))))
 
-        for _, row in g.iterrows():
-            card = build_card(row, schema, rank=ranks.get(row.get("repair_id")))
-            if chunk_chars + len(card) > max_file_chars and chunk_lines:
-                _flush()
-            chunk_lines.append(card)
-            chunk_count += 1
-            chunk_chars += len(card)
-        _flush()
+    rep_header = (
+        f"代表レコードカード ｜ セッション: {session_id}\n"
+        f"各「{core['name']}」（core軸）の値ごとに関連度の高い順で最大{REPRESENTATIVE_PER_CORE}件を掲載。\n"
+        f"掲載 {rep_info['selected']}件 / 全{len(df)}件。"
+        f"全件の詳細（コメント原文含む）は同梱の tagged_flat.xlsx を参照してください。\n"
+    )
+    rep_body = rep_header + "\n".join(sections) + "\n"
 
-    # ── 概要（manifest が揃ってから） ──
+    # 念のための文字数ガード（超過時は末尾の代表から削る方針で割愛を明記）
+    if len(rep_body) > MAX_FILE_CHARS:
+        rep_body = (
+            rep_body[:MAX_FILE_CHARS]
+            + "\n\n※ 文字数上限のため一部の代表カードを割愛しました。"
+              "全件は tagged_flat.xlsx を参照してください。\n"
+        )
+
+    rep_path = out_dir / rep_name
+    rep_path.write_text(rep_body, encoding="utf-8")
+    outputs[rep_name] = rep_path
+
+    # ── 概要 ──
     overview_name = f"{sid}_00_overview.txt"
     overview_path = out_dir / overview_name
     overview_path.write_text(
-        build_overview(df, ranked_df, schema, inquiry_text, session_id, manifest) + "\n",
+        build_overview(df, schema, inquiry_text, session_id, rep_info) + "\n",
         encoding="utf-8",
     )
     outputs[overview_name] = overview_path
 
-    # ── ranked 単一シートxlsx（日本語列名） ──
-    if ranked_df is not None and not ranked_df.empty:
-        flat_name = f"{sid}_90_ranked_flat.xlsx"
-        flat = ranked_df.rename(columns=_japanese_rename_map(ranked_df.columns, schema))
-        flat.to_excel(out_dir / flat_name, sheet_name="ranked", index=False)
-        outputs[flat_name] = out_dir / flat_name
+    # ── tagged 全件の単一シートxlsx（日本語列名・関連度降順・コメント原文入り） ──
+    flat_name = f"{sid}_90_tagged_flat.xlsx"
+    flat = df
+    if "overall_relevance" in flat.columns:
+        flat = flat.sort_values("overall_relevance", ascending=False)
+    flat = flat.rename(columns=_japanese_rename_map(flat.columns, schema))
+    flat.to_excel(out_dir / flat_name, sheet_name="tagged", index=False)
+    outputs[flat_name] = out_dir / flat_name
 
     return outputs
